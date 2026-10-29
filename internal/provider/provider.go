@@ -53,3 +53,5 @@ type ProgressPreparer interface {
 type DestinationVerifier interface {
 	VerifyDestination(context.Context, domain.Plan) error
 }
+
+type GuideProvider interface{ ExecutionGuide() string }

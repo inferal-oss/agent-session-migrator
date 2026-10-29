@@ -39,3 +39,5 @@ The plan store reserves sessions across queues under a writer lock and atomicall
 New plans include a deterministic Git-visible working-state digest. Source checks distinguish staged, unstaged, and untracked contents. The `verify` command rebinds the SSH host, checks repository identity, and recomputes the destination digest before recording verification. Ignored files are outside this contract.
 
 Coordinator creation uses `thread/start` and `thread/name/set` to create a persistent conversation without starting a turn. The creation and readback protocol was exercised against an isolated temporary Codex data directory. Host identity comes from `remoteControl/status/read`, with a narrow desktop-metadata fallback. Neither source nor destination provider databases are edited directly.
+
+The Codex runner is embedded in the executable and available through `guide codex`. Its content is tested against the published documentation, and coordinator instructions include the running executable's absolute path.

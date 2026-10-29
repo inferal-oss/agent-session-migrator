@@ -25,7 +25,11 @@ func (*Provider) Workflow() provider.Workflow {
 	return provider.Workflow{Label: "Codex-assisted handoff", Assisted: true, DefaultExecutable: "codex"}
 }
 func (*Provider) Instructions(plan string) string {
-	return "  In the coordinating Codex chat, ask:\n  Execute this plan using docs/providers/codex-runner.md:\n  " + plan
+	binary, err := os.Executable()
+	if err != nil {
+		binary = "agent-session-migrator"
+	}
+	return "  In the selected coordinator conversation, ask:\n  Run " + gitwork.ShellQuote(binary) + " guide codex, then follow it for:\n  " + plan
 }
 func (*Provider) Discover(ctx context.Context, o provider.DiscoveryOptions) (domain.Catalog, string, error) {
 	var c domain.Catalog

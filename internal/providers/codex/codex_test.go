@@ -15,6 +15,16 @@ import (
 
 var _ provider.Provider = New()
 
+func TestEmbeddedGuideMatchesPublishedDocumentation(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "providers", "codex-runner.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != New().ExecutionGuide() {
+		t.Fatal("embedded guide differs from published documentation")
+	}
+}
+
 func TestDestinationBindingRejectsWrongHostBeforeGitUpload(t *testing.T) {
 	if err := matchHost("remote-control:expected", "other"); err == nil {
 		t.Fatal("accepted wrong SSH target")

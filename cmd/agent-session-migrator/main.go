@@ -150,6 +150,18 @@ func newRoot() *cobra.Command {
 		return backend.Prepare(cmd.Context(), prepareFile, cmd.OutOrStdout())
 	}
 	root.AddCommand(prepare)
+	root.AddCommand(&cobra.Command{Use: "guide PROVIDER", Short: "Print the embedded provider execution guide for the coordinator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		backend, err := resolve(args[0])
+		if err != nil {
+			return err
+		}
+		guide, ok := backend.(provider.GuideProvider)
+		if !ok {
+			return fmt.Errorf("provider has no assisted execution guide")
+		}
+		_, err = fmt.Fprint(cmd.OutOrStdout(), guide.ExecutionGuide())
+		return err
+	}})
 	root.AddCommand(&cobra.Command{Use: "status PLAN", Short: "Show each session's durable transaction state", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		p, err := domain.LoadPlan(args[0])
 		if err != nil {
