@@ -56,9 +56,6 @@ func (*Provider) Discover(ctx context.Context, o provider.DiscoveryOptions) (dom
 	if o.CoordinatorID != "" {
 		c.CoordinatorSessionID = o.CoordinatorID
 	}
-	if c.CoordinatorSessionID == "" {
-		return c, "", fmt.Errorf("set --coordinator to the Codex chat that will execute this plan (or use --demo)")
-	}
 	if o.CatalogPath != "" && o.SupplementLocal {
 		if err := supplementLocal(&c, o.Home); err != nil {
 			warning = "Local supplement unavailable; showing exported catalog only: " + err.Error()
@@ -85,7 +82,24 @@ func (p *Provider) Prepare(ctx context.Context, planPath string, out io.Writer) 
 		return err
 	}
 	fmt.Fprintln(out, "Preparing repositories for Codex. Native conversation handoff follows separately.")
-	return gitwork.PreparePlan(ctx, planPath, registerRemoteProject, out)
+	if err = verifyDestination(ctx, plan); err != nil {
+		return err
+	}
+	return gitwork.PreparePlan(ctx, planPath, registerRemoteProject, out, nil)
+}
+
+func (p *Provider) PrepareWithProgress(ctx context.Context, file string, out io.Writer, observe func(domain.Progress)) error {
+	plan, err := domain.LoadPlan(file)
+	if err != nil {
+		return err
+	}
+	if plan.ProviderID != p.ID() {
+		return fmt.Errorf("wrong provider")
+	}
+	if err = verifyDestination(ctx, plan); err != nil {
+		return err
+	}
+	return gitwork.PreparePlan(ctx, file, registerRemoteProject, out, observe)
 }
 func DefaultHome() string {
 	if h := os.Getenv("CODEX_HOME"); h != "" {

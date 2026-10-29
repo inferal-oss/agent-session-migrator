@@ -3,8 +3,8 @@
 The program distinguishes preparation from session transfer. A provider must state whether transfer is assisted by its host application or available through a direct API. The UI must never infer that preparing a checkout moved a session.
 
 ```text
-cmd/agent-session-migrator   CLI parsing and provider registration
-internal/ui                 Bubble Tea model and selection workflow
+cmd/agent-session-migrator   Cobra command tree and provider registration
+internal/ui                 Bubble Tea coordinator, history, progress, and selection workflows
 internal/domain             Catalogs, plans, receipts, event transitions
 internal/provider           Provider contract and optional Executor
 internal/gitwork            Repository inspection, identity, bundles, SSH
@@ -34,4 +34,8 @@ Native handoff is deliberately outside that client: no standalone endpoint was e
 
 Plans are immutable after selection and include source commits. Preparation checks the source repository and commit before importing objects. A source change requires a fresh plan. A failed clone is preserved for inspection; an existing directory with an unexpected repository is never overwritten.
 
-The journal serializes writers with a lock and replaces its file atomically. It gates archive acknowledgements on prior verification. The executor must also apply these checks before calling the archive API; recording an event after the fact is not a substitute for checking first. A failure stops the queue; no later session is started automatically.
+The plan store reserves sessions across queues under a writer lock and atomically publishes synced manifests. The journal serializes writers with a lock, syncs updates, and replaces its file atomically. Dispatch intent is persisted before calling the provider; an intent without a returned operation ID is uncertain and cannot be retried automatically. It gates archive acknowledgements on prior verification. The executor must also apply these checks before calling the archive API; recording an event after the fact is not a substitute for checking first. A failure stops the queue; no later session is started automatically.
+
+New plans include a deterministic Git-visible working-state digest. Source checks distinguish staged, unstaged, and untracked contents. The `verify` command rebinds the SSH host, checks repository identity, and recomputes the destination digest before recording verification. Ignored files are outside this contract.
+
+Coordinator creation uses `thread/start` and `thread/name/set` to create a persistent conversation without starting a turn. The creation and readback protocol was exercised against an isolated temporary Codex data directory. Host identity comes from `remoteControl/status/read`, with a narrow desktop-metadata fallback. Neither source nor destination provider databases are edited directly.

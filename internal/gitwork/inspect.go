@@ -2,7 +2,6 @@ package gitwork
 
 import (
 	"context"
-	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 	"net/url"
 	"os"
 	"os/exec"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 )
 
 func Git(cwd string, args ...string) (string, error) {
@@ -33,7 +34,7 @@ func InspectRepo(cwd string) domain.Repo {
 		r.Error = "workspace missing or not a Git repository"
 		return r
 	}
-	r.CommonDir, err = Git(cwd, "rev-parse", "--path-format=absolute", "--Git-common-dir")
+	r.CommonDir, err = Git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		r.Error = "cannot resolve Git common directory"
 		return r

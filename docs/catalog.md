@@ -1,5 +1,7 @@
 # Provider catalogs
 
+Coordinator identity is optional in an initial catalog; the TUI prompts for it when absent.
+
 The selector can use a JSON catalog exported by a provider's host application. Catalogs contain metadata, not conversation history or credentials. Keep real catalogs outside the source repository.
 
 ```json

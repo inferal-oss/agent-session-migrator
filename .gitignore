@@ -9,3 +9,4 @@
 *.bundle
 coverage.out
 .DS_Store
+/agent-session-migrator

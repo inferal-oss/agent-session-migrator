@@ -42,3 +42,14 @@ type Executor interface {
 	Verify(context.Context, domain.Plan, domain.Session, string) (domain.Event, error)
 	Archive(context.Context, domain.Plan, domain.Session) (domain.Event, error)
 }
+
+type CoordinatorCreator interface {
+	CreateCoordinator(context.Context, DiscoveryOptions, string, string) (domain.Session, error)
+}
+type ProgressPreparer interface {
+	PrepareWithProgress(context.Context, string, io.Writer, func(domain.Progress)) error
+}
+
+type DestinationVerifier interface {
+	VerifyDestination(context.Context, domain.Plan) error
+}

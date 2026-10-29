@@ -2,10 +2,13 @@ package gitwork
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/inferal-oss/agent-session-migrator/internal/domain"
@@ -135,5 +138,66 @@ func TestCloneScriptRefusesExistingPath(t *testing.T) {
 	}
 	if b, err := os.ReadFile(marker); err != nil || string(b) != "preserve" {
 		t.Fatal("existing files modified")
+	}
+}
+
+func TestPreparationTransfersMissingCommitAndReportsBytes(t *testing.T) {
+	fakeLocalSSH(t)
+	ctx := context.Background()
+	source := committedRepo(t)
+	origin := "https://example.invalid/team/repo.git"
+	gitTest(t, source, "remote", "add", "origin", origin)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest, err := RemoteRepoPath(root, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, source, "clone", source, dest)
+	gitTest(t, dest, "remote", "set-url", "origin", origin)
+	before := gitTest(t, dest, "rev-parse", "HEAD")
+	if err = os.WriteFile(filepath.Join(source, "data"), []byte("new commit\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, source, "add", "data")
+	gitTest(t, source, "-c", "commit.gpgsign=false", "commit", "-m", "unpushed")
+	session := domain.Session{ID: "session", Title: "Transfer test", HostID: "local", Cwd: source, ProjectName: "Example", Repo: InspectRepo(source)}
+	catalog := domain.Catalog{Version: 1, ProviderID: "test", CoordinatorSessionID: "coordinator", LocalHostID: "local", Hosts: []domain.Host{{ID: "remote", Name: "Remote"}}, Sessions: []domain.Session{session}}
+	p, err := domain.NewPlan(catalog, catalog.Hosts[0], map[string]bool{"session": true}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Preparation = domain.Preparation{SSHTarget: "fake", Root: root, Executable: "unused"}
+	p, err = SealPlan(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "plan.json")
+	if err = domain.WriteNewJSON(file, p); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var bytesSent int64
+	completed := 0
+	err = PreparePlan(ctx, file, func(context.Context, domain.Preparation, string, string) (string, error) { return "project", nil }, io.Discard, func(p domain.Progress) {
+		mu.Lock()
+		defer mu.Unlock()
+		bytesSent = max(bytesSent, p.Bytes)
+		completed = max(completed, p.Completed)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytesSent == 0 || completed != 1 {
+		t.Fatalf("missing progress: bytes=%d completed=%d", bytesSent, completed)
+	}
+	if got := gitTest(t, dest, "rev-parse", "HEAD"); got != before {
+		t.Fatal("preparation changed existing checkout")
+	}
+	var receipt domain.Prepared
+	if err = domain.ReadJSON(file+".prepared.json", &receipt); err != nil || len(receipt.Repositories) != 1 {
+		t.Fatalf("receipt=%#v err=%v", receipt, err)
 	}
 }

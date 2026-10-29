@@ -6,7 +6,7 @@ import (
 )
 
 func ValidateCatalog(c Catalog) error {
-	if c.Version != 1 || c.ProviderID == "" || c.CoordinatorSessionID == "" || c.LocalHostID == "" || len(c.Hosts) == 0 {
+	if c.Version != 1 || c.ProviderID == "" || c.LocalHostID == "" || len(c.Hosts) == 0 {
 		return errors.New("unsupported or incomplete provider catalog")
 	}
 	seen := map[string]bool{}

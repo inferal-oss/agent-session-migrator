@@ -9,7 +9,7 @@ import (
 
 func fixture(t *testing.T) (Catalog, string) {
 	t.Helper()
-	c := Catalog{ProviderID: "test", Version: 1, GeneratedAt: time.Now(), CoordinatorSessionID: "coordinator", LocalHostID: "local", Hosts: []Host{{ID: "local", Name: "Local"}, {ID: "remote", Name: "Remote"}}, Sessions: []Session{{ID: "one", Title: "First", HostID: "local", Status: "idle", Repo: Repo{Root: "/repo"}}, {ID: "two", Title: "Second", HostID: "local", Status: "idle", Repo: Repo{Root: "/repo"}}, {ID: "coordinator", HostID: "local", Status: "idle", Repo: Repo{Root: "/repo"}}}}
+	c := Catalog{ProviderID: "test", Version: 1, GeneratedAt: time.Now(), CoordinatorSessionID: "coordinator", LocalHostID: "local", Hosts: []Host{{ID: "local", Name: "Local"}, {ID: "remote", Name: "Remote"}}, Sessions: []Session{{ID: "one", Title: "First", HostID: "local", Status: "idle", Repo: Repo{Root: "/repo", StateDigest: "snapshot"}}, {ID: "two", Title: "Second", HostID: "local", Status: "idle", Repo: Repo{Root: "/repo", StateDigest: "snapshot"}}, {ID: "coordinator", HostID: "local", Status: "idle", Repo: Repo{Root: "/repo", StateDigest: "snapshot"}}}}
 	return c, filepath.Join(t.TempDir(), "plan.json")
 }
 func TestProtectedAndRunningSessions(t *testing.T) {
@@ -41,26 +41,32 @@ func TestNoArchiveBeforeVerifiedAndSerialOrder(t *testing.T) {
 	if err = RecordEvent(file, Event{SessionID: "two", State: "started", OperationID: "op2"}); err == nil {
 		t.Fatal("second session started before first completed")
 	}
+	if err = RecordEvent(file, Event{SessionID: "one", State: "intent"}); err != nil {
+		t.Fatal(err)
+	}
 	if err = RecordEvent(file, Event{SessionID: "one", State: "started", OperationID: "op1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err = RecordEvent(file, Event{SessionID: "one", State: "verified", HostID: "wrong-host", Cwd: "/repo", Evidence: "success"}); err == nil {
+	if err = RecordEvent(file, Event{SessionID: "one", State: "verified", StateDigest: "snapshot", HostID: "wrong-host", Cwd: "/repo", Evidence: "success"}); err == nil {
 		t.Fatal("accepted wrong destination")
 	}
-	if err = RecordEvent(file, Event{SessionID: "one", State: "verified", HostID: "remote", Cwd: "/repo", Evidence: "native completion and destination readback"}); err != nil {
+	if err = RecordEvent(file, Event{SessionID: "one", State: "verified", StateDigest: "snapshot", HostID: "remote", Cwd: "/repo", Evidence: "native completion and destination readback"}); err != nil {
 		t.Fatal(err)
 	}
 	if err = RecordEvent(file, Event{SessionID: "one", State: "archived", HostID: "remote", Evidence: "archive tool succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = RecordEvent(file, Event{SessionID: "two", State: "intent"}); err != nil {
 		t.Fatal(err)
 	}
 	if err = RecordEvent(file, Event{SessionID: "two", State: "started", OperationID: "op2"}); err != nil {
 		t.Fatal(err)
 	}
 	events, err := LoadEvents(file + ".events.json")
-	if err != nil || len(events) != 4 {
+	if err != nil || len(events) != 6 {
 		t.Fatalf("events=%v err=%v", events, err)
 	}
-	if events[2].OperationID != "op1" {
+	if events[3].OperationID != "op1" {
 		t.Fatal("lost operation identity")
 	}
 }

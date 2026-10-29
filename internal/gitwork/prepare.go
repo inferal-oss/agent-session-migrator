@@ -1,8 +1,6 @@
 package gitwork
 
 import (
-	"github.com/inferal-oss/agent-session-migrator/internal/domain"
-
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 )
 
 func ShellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
@@ -122,7 +122,7 @@ func RunSSH(parent context.Context, p domain.Preparation, script string, input i
 	}
 	return strings.TrimSpace(string(out)), nil
 }
-func PreparePlan(ctx context.Context, planPath string, register func(context.Context, domain.Preparation, string, string) (string, error), log io.Writer) error {
+func PreparePlan(ctx context.Context, planPath string, register func(context.Context, domain.Preparation, string, string) (string, error), log io.Writer, observe func(domain.Progress)) error {
 	p, err := domain.LoadPlan(planPath)
 	if err != nil {
 		return err
@@ -146,6 +146,18 @@ func PreparePlan(ctx context.Context, planPath string, register func(context.Con
 			return err
 		}
 		t := j.Session
+		notify := func(stage string, bytes, total int64) {
+			if observe != nil {
+				observe(domain.Progress{SessionID: t.ID, Stage: stage, Bytes: bytes, Total: total, Completed: i, Count: len(p.Jobs)})
+			}
+		}
+		notify("Checking repository", 0, 0)
+		if p.Version < 2 {
+			return errors.New("legacy plan has no working-state snapshot; create a fresh plan")
+		}
+		if err = CheckSource(ctx, t); err != nil {
+			return fmt.Errorf("%s: %w", t.Title, err)
+		}
 		fmt.Fprintf(log, "[%d/%d] %s\n", i+1, len(p.Jobs), t.Title)
 		if !regexp.MustCompile(`^[0-9a-fA-F]{40,64}$`).MatchString(t.Repo.SHA) {
 			return errors.New("invalid source commit")
@@ -213,9 +225,15 @@ func PreparePlan(ctx context.Context, planPath string, register func(context.Con
 					return err
 				}
 				defer f.Close()
+				info, err := f.Stat()
+				if err != nil {
+					return err
+				}
+				notify("Sending Git bundle", 0, info.Size())
 				sum := sha256.Sum256([]byte(t.ID))
 				ref := "refs/agent-session-migrator/" + p.ID + "/" + hex.EncodeToString(sum[:8])
-				_, err = RunSSH(ctx, p.Preparation, receiveBundleScript, f, repo, t.Repo.SHA, ref)
+				reader := &countReader{Reader: f, notify: func(n int64) { notify("Sending Git bundle", n, info.Size()) }}
+				_, err = RunSSH(ctx, p.Preparation, receiveBundleScript, reader, repo, t.Repo.SHA, ref)
 				return err
 			}()
 			if err != nil {
@@ -230,11 +248,15 @@ func PreparePlan(ctx context.Context, planPath string, register func(context.Con
 			return fmt.Errorf("project subdirectory must exist in the remote checkout; native handoff has not run: %w", err)
 		}
 		fmt.Fprintln(log, "  Register saved project:", t.ProjectName, "at", projectPath)
+		notify("Registering saved project", 0, 0)
 		projectID, err := register(ctx, p.Preparation, t.ProjectName, projectPath)
 		if err != nil {
 			return fmt.Errorf("repository is prepared but project registration failed: %w", err)
 		}
 		result.Repositories = append(result.Repositories, domain.PreparedRepo{Origin: t.Repo.Origin, Path: repo, ProjectPath: projectPath, ProjectID: projectID, SHA: t.Repo.SHA, SessionID: t.ID})
+		if observe != nil {
+			observe(domain.Progress{SessionID: t.ID, Stage: "Repository prepared", Completed: i + 1, Count: len(p.Jobs)})
+		}
 	}
 	result.CompletedAt = time.Now().UTC()
 	if err = domain.WriteNewJSON(planPath+".prepared.json", result); err != nil {
@@ -242,4 +264,17 @@ func PreparePlan(ctx context.Context, planPath string, register func(context.Con
 	}
 	fmt.Fprintln(log, "Repository preparation verified. Use the provider executor to transfer sessions.")
 	return nil
+}
+
+type countReader struct {
+	io.Reader
+	count  int64
+	notify func(int64)
+}
+
+func (r *countReader) Read(b []byte) (int, error) {
+	n, err := r.Reader.Read(b)
+	r.count += int64(n)
+	r.notify(r.count)
+	return n, err
 }

@@ -1,24 +1,20 @@
 package ui
 
 import (
-	"github.com/inferal-oss/agent-session-migrator/internal/gitwork"
-
 	"context"
-	"github.com/inferal-oss/agent-session-migrator/internal/domain"
-	"github.com/inferal-oss/agent-session-migrator/internal/provider"
-
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
 
+	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/table"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/inferal-oss/agent-session-migrator/internal/domain"
+	"github.com/inferal-oss/agent-session-migrator/internal/gitwork"
+	"github.com/inferal-oss/agent-session-migrator/internal/provider"
 )
 
 var accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#A8E6CF")).Bold(true)
@@ -38,6 +34,7 @@ type eventsMsg struct {
 }
 type preparedMsg struct{ err error }
 type Options struct {
+	Context    context.Context
 	Discovery  provider.DiscoveryOptions
 	Out, Watch string
 	Demo       bool
@@ -62,6 +59,14 @@ type model struct {
 	events               []domain.Event
 	sshInput, rootInput  textinput.Model
 	prepField            int
+	coordinatorChoice    int
+	coordinatorName      textinput.Model
+	history              []domain.HistoryEntry
+	historyCursor        int
+	bar                  progress.Model
+	transferProgress     domain.Progress
+	prepareCancel        context.CancelFunc
+	progressCh           chan tea.Msg
 }
 
 func New(backend provider.Provider, o Options) tea.Model {
@@ -78,7 +83,13 @@ func New(backend provider.Provider, o Options) tea.Model {
 	root := textinput.New()
 	root.Placeholder = "Absolute checkout root on destination, e.g. /srv/projects"
 	root.SetWidth(70)
-	return model{backend: backend, o: o, stage: "loading", table: t, filter: f, selected: map[string]bool{}, width: 110, height: 36, sshInput: ssh, rootInput: root}
+	if o.Context == nil {
+		o.Context = context.Background()
+	}
+	name := textinput.New()
+	name.SetValue("Coordinate agent session migrations")
+	name.SetWidth(65)
+	return model{backend: backend, o: o, stage: "loading", table: t, filter: f, selected: map[string]bool{}, width: 110, height: 36, sshInput: ssh, rootInput: root, coordinatorName: name, bar: progress.New(progress.WithDefaultBlend())}
 }
 func (m model) Init() tea.Cmd {
 	return func() tea.Msg {
@@ -89,7 +100,7 @@ func (m model) Init() tea.Cmd {
 				err error
 			}{p, err}
 		}
-		c, w, err := m.backend.Discover(context.Background(), m.o.Discovery)
+		c, w, err := m.backend.Discover(m.o.Context, m.o.Discovery)
 		return loadedMsg{c, w, err}
 	}
 }
@@ -115,7 +126,7 @@ func (m *model) rebuild() {
 			mark = "●"
 		}
 		state := t.Status
-		if reason := domain.Blocked(t, m.c, m.host(), m.interrupt); reason != "" {
+		if reason := domain.Blocked(t, m.c, m.host(), m.interrupt); reason != "" && m.stage != "existing" {
 			mark = "–"
 			state = "blocked"
 		}
@@ -168,14 +179,10 @@ func (m *model) toggle() {
 	m.rebuild()
 }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.workflowMessage(msg); handled {
+		return next, cmd
+	}
 	switch v := msg.(type) {
-	case preparedMsg:
-		if v.err != nil {
-			m.note = "Preparation stopped: " + v.err.Error()
-		} else {
-			m.note = "Repositories and saved projects prepared; ask the provider to execute the plan."
-		}
-		return m, nil
 	case loadedMsg:
 		m.c = v.catalog
 		m.note = v.warning
@@ -184,7 +191,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stage = "error"
 			return m, nil
 		}
+		history, err := domain.History(m.o.Out)
+		if err != nil {
+			m.err = err
+			m.stage = "error"
+			return m, nil
+		}
+		m.history = history
+		domain.Reserve(&m.c, history)
 		m.stage = "hosts"
+		if m.c.CoordinatorSessionID == "" {
+			m.stage = "coordinator"
+		}
 		m.rebuild()
 		return m, nil
 	case struct {
@@ -198,6 +216,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.plan = v.p
 		m.planPath = m.o.Watch
+		m.o.Discovery.CoordinatorID = m.plan.CoordinatorSessionID
 		m.stage = "queued"
 		return m, tick()
 	case tea.WindowSizeMsg:
@@ -212,6 +231,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case eventsMsg:
+		if m.stage != "queued" {
+			return m, nil
+		}
 		m.events = v.events
 		if v.err != nil {
 			m.note = "Journal: " + v.err.Error()
@@ -219,11 +241,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 	case tea.KeyPressMsg:
 		key := v.String()
-		if key == "ctrl+c" || (!m.filtering && m.stage != "connection" && key == "q") {
+		if key == "ctrl+c" || (!m.filtering && m.stage != "connection" && m.stage != "new-coordinator" && key == "q") {
+			if m.prepareCancel != nil {
+				m.prepareCancel()
+			}
 			return m, tea.Quit
 		}
 		if m.width < 70 || m.height < 24 {
 			return m, nil
+		}
+		if next, cmd, handled := m.workflowKey(v); handled {
+			return next, cmd
 		}
 		if m.filtering {
 			if key == "esc" || key == "enter" {
@@ -344,27 +372,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.note = "Demo cannot queue real migrations."
 					return m, nil
 				}
-				abs, err := filepath.Abs(filepath.Join(m.o.Out, time.Now().Format("20060102-150405")+"-"+m.plan.ID+".json"))
-				if err == nil {
-					err = domain.WriteNewJSON(abs, m.plan)
+				m.stage = "sealing"
+				plan, ctx, out := m.plan, m.o.Context, m.o.Out
+				return m, func() tea.Msg {
+					p, err := gitwork.SealPlan(ctx, plan)
+					var file string
+					if err == nil {
+						file, err = domain.SavePlan(out, p)
+					}
+					return savedMsg{plan: p, file: file, err: err}
 				}
-				if err != nil {
-					m.note = err.Error()
-					return m, nil
-				}
-				m.planPath = abs
-				m.stage = "queued"
-				return m, tick()
 			}
 			return m, nil
 		case "queued":
 			if key == "p" {
-				binary, err := os.Executable()
-				if err != nil {
-					m.note = err.Error()
-					return m, nil
-				}
-				return m, tea.ExecProcess(exec.Command(binary, "prepare", "--plan", m.planPath), func(err error) tea.Msg { return preparedMsg{err} })
+				return m.startPreparation()
 			}
 			return m, nil
 		}
@@ -380,11 +402,14 @@ func (m model) View() tea.View {
 	}
 	b.WriteString(accent.Render("  AGENT SESSION MIGRATOR") + "\n" + muted.Render("  "+m.backend.Name()+" · Discover → select → prepare → verify → archive") + "\n\n")
 	switch m.stage {
+	case "coordinator", "existing", "new-coordinator", "creating-coordinator", "history", "sealing", "preparing":
+		b.WriteString(m.workflowView())
 	case "loading":
 		b.WriteString("  Discovering sessions and inspecting repositories…\n")
 	case "error":
 		b.WriteString(warnStyle.Render("  "+m.err.Error()) + "\n\n  q quit\n")
 	case "hosts":
+		b.WriteString(muted.Render("  Coordinator: "+clean(m.c.CoordinatorSessionID)) + "\n\n")
 		b.WriteString("  Choose a destination discovered from provider\n\n")
 		for i, h := range m.c.Hosts {
 			line := "    " + clean(h.Name)
@@ -393,7 +418,7 @@ func (m model) View() tea.View {
 			}
 			b.WriteString(line + "\n" + muted.Render("      "+clean(h.ID)) + "\n")
 		}
-		b.WriteString("\n  ↑/↓ choose · enter tasks · q quit\n")
+		b.WriteString("\n  ↑/↓ choose · enter tasks · c coordinator · h history · q quit\n")
 	case "connection":
 		b.WriteString("  Destination: " + clean(m.host().Name) + "\n\n  SSH connection\n  " + m.sshInput.View() + "\n\n  Remote checkout root\n  " + m.rootInput.View() + "\n\n  Use the SSH alias for the selected provider host. The executor must\n  verify they refer to the same machine before moving any chats.\n\n  tab switch field · enter tasks · esc back · ctrl+c quit\n")
 	case "tasks":
@@ -429,9 +454,19 @@ func (m model) View() tea.View {
 		for _, e := range m.events {
 			states[e.SessionID] = e.State
 		}
+		verified, archived := 0, 0
+		for _, j := range m.plan.Jobs {
+			if states[j.Session.ID] == "verified" || states[j.Session.ID] == "archived" {
+				verified++
+			}
+			if states[j.Session.ID] == "archived" {
+				archived++
+			}
+		}
 		b.WriteString(accent.Render("  Queue saved · "+m.backend.Workflow().Label) + "\n\n  " + m.planPath + "\n\n")
+		b.WriteString("  " + m.bar.ViewAs(float64(verified)/float64(max(1, len(m.plan.Jobs)))) + fmt.Sprintf("\n  %d/%d conversations verified · %d archived\n\n", verified, len(m.plan.Jobs), archived))
 		for i, j := range m.plan.Jobs {
-			if i >= max(1, m.height-18) {
+			if i >= max(1, m.height-24) {
 				b.WriteString(fmt.Sprintf("  … %d more (use the status command)\n", len(m.plan.Jobs)-i))
 				break
 			}
@@ -441,7 +476,7 @@ func (m model) View() tea.View {
 			}
 			b.WriteString(fmt.Sprintf("  %-10s %s\n", s, clean(j.Session.Title)))
 		}
-		b.WriteString("\n  p prepare repositories and saved projects over SSH\n\n" + m.backend.Instructions(m.planPath) + "\n\n  Saving a queue starts no transfers. q closes this viewer.\n")
+		b.WriteString("\n  p prepare repositories · n transfer more · h history\n\n" + m.backend.Instructions(m.planPath) + "\n\n  Native handoff byte totals may be unavailable. q closes this viewer.\n")
 	}
 	if m.note != "" {
 		b.WriteString("\n" + warnStyle.Width(max(30, m.width-6)).Render("  "+clean(m.note)) + "\n")

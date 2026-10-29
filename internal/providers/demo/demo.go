@@ -1,8 +1,9 @@
 package demo
 
 import (
-	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 	"time"
+
+	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 )
 
 func catalog() domain.Catalog {

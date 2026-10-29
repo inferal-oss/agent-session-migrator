@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 	"github.com/inferal-oss/agent-session-migrator/internal/provider"
 	"github.com/inferal-oss/agent-session-migrator/internal/providers/demo"
 )
@@ -101,6 +102,48 @@ func TestTableRendersSessionRows(t *testing.T) {
 	m.rebuild()
 	if !strings.Contains(m.table.View(), "Implement streaming output") {
 		t.Fatalf("table rows are invisible: %q", m.table.View())
+	}
+}
+
+func TestCoordinatorWizardAllowsExistingNonGitConversation(t *testing.T) {
+	m := demoModel(t)
+	m.c.CoordinatorSessionID = ""
+	m.stage = "coordinator"
+	m = key(m, tea.KeyEnter, "")
+	if m.stage != "existing" {
+		t.Fatal(m.stage)
+	}
+	m.table.SetCursor(2)
+	m = key(m, tea.KeyEnter, "")
+	if m.stage != "hosts" || m.c.CoordinatorSessionID != "coordinator" {
+		t.Fatal("failed to select non-Git coordinator")
+	}
+}
+func TestCoordinatorCreationIsExplicitAndDemoDoesNotUseProvider(t *testing.T) {
+	m := demoModel(t)
+	m.stage = "coordinator"
+	m = key(m, tea.KeyDown, "")
+	m = key(m, tea.KeyEnter, "")
+	if m.stage != "new-coordinator" {
+		t.Fatal(m.stage)
+	}
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("no creation action")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(model)
+	if m.c.CoordinatorSessionID != "demo-coordinator" || m.stage != "hosts" {
+		t.Fatal("coordinator not selected")
+	}
+}
+func TestProgressViewShowsActualByteCount(t *testing.T) {
+	m := demoModel(t)
+	m.stage = "preparing"
+	m.transferProgress = domain.Progress{Stage: "Sending Git bundle", Bytes: 50, Total: 100, Count: 2}
+	if !strings.Contains(m.View().Content, "50 / 100 Git bundle bytes sent") {
+		t.Fatal(m.View().Content)
 	}
 }
 func TestNarrowWindowAndCleanLabels(t *testing.T) {

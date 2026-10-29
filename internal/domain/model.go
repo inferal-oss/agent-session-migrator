@@ -22,13 +22,14 @@ type Project struct {
 	HostID string `json:"hostId"`
 }
 type Repo struct {
-	Root      string `json:"root"`
-	CommonDir string `json:"commonDir"`
-	Origin    string `json:"origin"`
-	Branch    string `json:"branch"`
-	SHA       string `json:"sha"`
-	Dirty     bool   `json:"dirty"`
-	Error     string `json:"error,omitempty"`
+	Root        string `json:"root"`
+	CommonDir   string `json:"commonDir"`
+	Origin      string `json:"origin"`
+	Branch      string `json:"branch"`
+	SHA         string `json:"sha"`
+	Dirty       bool   `json:"dirty"`
+	Error       string `json:"error,omitempty"`
+	StateDigest string `json:"stateDigest,omitempty"`
 }
 type Session struct {
 	ID            string `json:"id"`
@@ -41,6 +42,7 @@ type Session struct {
 	Status        string `json:"status"`
 	Pinned        bool   `json:"pinned"`
 	Repo          Repo   `json:"repo"`
+	ReservedBy    string `json:"reservedBy,omitempty"`
 }
 type Catalog struct {
 	ProviderID           string    `json:"providerId"`
@@ -79,6 +81,7 @@ type Event struct {
 	HostID      string    `json:"hostId,omitempty"`
 	Cwd         string    `json:"cwd,omitempty"`
 	Evidence    string    `json:"evidence,omitempty"`
+	StateDigest string    `json:"stateDigest,omitempty"`
 }
 
 func ReadJSON(path string, out any) error {
@@ -96,21 +99,31 @@ func WriteNewJSON(path string, value any) error {
 	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	f, err := os.CreateTemp(filepath.Dir(path), ".pending-*")
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(append(b, '\n'))
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil {
+	defer os.Remove(f.Name())
+	if _, err = f.Write(append(b, '\n')); err != nil {
+		f.Close()
 		return err
 	}
-	return closeErr
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if err = os.Link(f.Name(), path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
 }
 func NewPlan(c Catalog, host Host, selected map[string]bool, interrupt bool) (Plan, error) {
+	if c.CoordinatorSessionID == "" {
+		return Plan{}, errors.New("choose or create a coordinator first")
+	}
 	if err := ValidateCatalog(c); err != nil {
 		return Plan{}, err
 	}
@@ -127,7 +140,7 @@ func NewPlan(c Catalog, host Host, selected map[string]bool, interrupt bool) (Pl
 	if _, err := rand.Read(b); err != nil {
 		return Plan{}, err
 	}
-	p := Plan{ProviderID: c.ProviderID, Version: 1, ID: hex.EncodeToString(b), CreatedAt: time.Now().UTC(), CatalogGeneratedAt: c.GeneratedAt, CoordinatorSessionID: c.CoordinatorSessionID, Destination: host, ArchiveAfterVerification: true, AllowInterrupt: interrupt}
+	p := Plan{ProviderID: c.ProviderID, Version: 2, ID: hex.EncodeToString(b), CreatedAt: time.Now().UTC(), CatalogGeneratedAt: c.GeneratedAt, CoordinatorSessionID: c.CoordinatorSessionID, Destination: host, ArchiveAfterVerification: true, AllowInterrupt: interrupt}
 	for _, t := range c.Sessions {
 		if selected[t.ID] {
 			if reason := Blocked(t, c, host, interrupt); reason != "" {
@@ -157,6 +170,9 @@ func NewPlan(c Catalog, host Host, selected map[string]bool, interrupt bool) (Pl
 	return p, nil
 }
 func Blocked(t Session, c Catalog, h Host, interrupt bool) string {
+	if t.ReservedBy != "" {
+		return "queued in another plan; open history"
+	}
 	if t.ID == c.CoordinatorSessionID {
 		return "coordinating chat"
 	}
@@ -183,7 +199,7 @@ func LoadPlan(path string) (Plan, error) {
 	if err != nil {
 		return p, err
 	}
-	if p.ProviderID == "" || p.Version != 1 || p.ID == "" || len(p.Jobs) == 0 || p.Destination.ID == "" || p.CoordinatorSessionID == "" || !p.ArchiveAfterVerification {
+	if p.ProviderID == "" || (p.Version != 1 && p.Version != 2) || p.ID == "" || len(p.Jobs) == 0 || p.Destination.ID == "" || p.CoordinatorSessionID == "" || !p.ArchiveAfterVerification {
 		return p, errors.New("invalid or unsupported migration plan")
 	}
 	seen := map[string]bool{}
@@ -227,6 +243,10 @@ func RecordEvent(planPath string, e Event) error {
 	ops := map[string]string{}
 	for _, v := range events {
 		states[v.SessionID] = v.State
+		if v.State == "retryable" {
+			delete(ops, v.SessionID)
+			continue
+		}
 		if v.OperationID != "" {
 			ops[v.SessionID] = v.OperationID
 		}
@@ -237,7 +257,7 @@ func RecordEvent(planPath string, e Event) error {
 			found = true
 			break
 		}
-		if states[j.Session.ID] != "archived" {
+		if !Terminal(states[j.Session.ID]) {
 			return errors.New("finish or resolve earlier jobs before recording this task")
 		}
 	}
@@ -249,11 +269,33 @@ func RecordEvent(planPath string, e Event) error {
 		return errors.New("operation ID differs from the dispatched transfer")
 	}
 	switch e.State {
+	case "intent":
+		if prev != "" && prev != "retryable" {
+			return errors.New("dispatch already recorded or uncertain; reconcile before retrying")
+		}
+		for _, j := range p.Jobs {
+			if j.Session.ID == e.SessionID && p.Version >= 2 && j.Session.Repo.StateDigest == "" {
+				return errors.New("seal the source snapshot before dispatch")
+			}
+		}
+	case "retryable":
+		if (prev != "intent" && prev != "failed") || e.Evidence == "" {
+			return errors.New("retry requires explicit reconciliation of the failed or uncertain dispatch")
+		}
+	case "cancelled":
+		if prev != "" && prev != "retryable" {
+			return errors.New("cannot cancel an uncertain or dispatched transfer; reconcile it first")
+		}
 	case "started":
-		if prev != "" || e.OperationID == "" {
+		if (prev != "intent" && !(p.Version == 1 && prev == "")) || e.OperationID == "" {
 			return errors.New("started requires a new job and handoff operation ID")
 		}
 	case "verified":
+		for _, j := range p.Jobs {
+			if j.Session.ID == e.SessionID && p.Version >= 2 && (e.StateDigest == "" || e.StateDigest != j.Session.Repo.StateDigest) {
+				return errors.New("verification digest does not match the sealed source")
+			}
+		}
 		if (prev != "started" && !(prev == "failed" && ops[e.SessionID] != "")) || e.HostID != p.Destination.ID || !filepath.IsAbs(e.Cwd) || e.Evidence == "" {
 			return errors.New("verification requires started handoff, destination host, absolute cwd, and evidence")
 		}
@@ -262,13 +304,16 @@ func RecordEvent(planPath string, e Event) error {
 			return errors.New("archive acknowledgement requires verification and destination evidence")
 		}
 	case "failed":
-		if prev == "archived" || e.Evidence == "" {
+		if Terminal(prev) || e.Evidence == "" {
 			return errors.New("failure requires explanation and an unfinished job")
 		}
 	default:
 		return errors.New("state must be started, verified, archived, or failed")
 	}
-	if e.OperationID == "" {
+	if e.State == "retryable" {
+		e.OperationID = ""
+	}
+	if e.OperationID == "" && e.State != "retryable" {
 		e.OperationID = ops[e.SessionID]
 	}
 	e.Time = time.Now().UTC()
@@ -289,7 +334,10 @@ func RecordEvent(planPath string, e Event) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err = os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
 }
 
 type Preparation struct {
@@ -311,4 +359,11 @@ type Prepared struct {
 	SSH               Preparation    `json:"ssh"`
 	CompletedAt       time.Time      `json:"completedAt"`
 	Repositories      []PreparedRepo `json:"repositories"`
+}
+
+type Progress struct {
+	SessionID        string
+	Stage            string
+	Bytes, Total     int64
+	Completed, Count int
 }

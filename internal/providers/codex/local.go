@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/inferal-oss/agent-session-migrator/internal/domain"
 )
 
 func supplementLocal(c *domain.Catalog, home string) error {

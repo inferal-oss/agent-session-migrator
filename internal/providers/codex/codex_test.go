@@ -15,6 +15,18 @@ import (
 
 var _ provider.Provider = New()
 
+func TestDestinationBindingRejectsWrongHostBeforeGitUpload(t *testing.T) {
+	if err := matchHost("remote-control:expected", "other"); err == nil {
+		t.Fatal("accepted wrong SSH target")
+	}
+	if err := matchHost("remote-control:expected", ""); err == nil {
+		t.Fatal("accepted absent native identity")
+	}
+	if err := matchHost("remote-control:expected", "expected"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLocalInventorySkipsUnknownAndRemotePlacement(t *testing.T) {
 	if _, err := exec.LookPath("sqlite3"); err != nil {
 		t.Skip("sqlite3 not installed")
