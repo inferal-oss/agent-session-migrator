@@ -1,0 +1,11 @@
+/bin/
+/dist/
+/plans/
+/queues/
+/catalog.json
+*.events.json
+*.prepared.json
+*.lock
+*.bundle
+coverage.out
+.DS_Store
