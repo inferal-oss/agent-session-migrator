@@ -21,4 +21,10 @@ jobs:
         run: test -z "$(gofmt -l cmd internal)"
       - run: go vet ./...
       - run: go test -race ./...
-      - run: go build ./cmd/agent-session-migrator
+      - name: Build and install
+        run: |
+          make all
+          make install PREFIX="$RUNNER_TEMP/agent-session-migrator-install"
+          "$RUNNER_TEMP/agent-session-migrator-install/bin/agent-session-migrator" --version
+          test -f "$RUNNER_TEMP/agent-session-migrator-install/share/licenses/agent-session-migrator/LICENSE-APACHE"
+          test -f "$RUNNER_TEMP/agent-session-migrator-install/share/licenses/agent-session-migrator/LICENSE-MIT"

@@ -29,11 +29,24 @@ go run ./cmd/agent-session-migrator --demo
 
 The demo uses synthetic data and cannot save a migration queue, prepare a repository, or transfer a session.
 
-Build a binary:
+Build a binary (`make` and `make all` both run `build`):
 
 ```sh
-go build -o bin/agent-session-migrator ./cmd/agent-session-migrator
+make
 ./bin/agent-session-migrator --help
+```
+
+Install the CLI to `~/.local/bin`, with license files under `~/.local/share/licenses/agent-session-migrator`:
+
+```sh
+make install
+agent-session-migrator --help
+```
+
+Add `~/.local/bin` to your `PATH` if needed. Override the install location with `make install PREFIX=/your/prefix` or `BINDIR=/your/bin`. `DESTDIR` supports package staging, and `VERSION` sets the version embedded in the binary:
+
+```sh
+make install PREFIX=/usr/local DESTDIR=/tmp/agent-session-migrator-package VERSION=dev
 ```
 
 ## Use with Codex
@@ -109,4 +122,8 @@ go vet ./...
 
 The shared domain, TUI, and Git/SSH code depend on a [provider interface](internal/provider/provider.go). Codex-specific metadata, project registration, and execution instructions are confined to its adapter. A separate optional `Executor` interface defines direct transfer, verification, and archival for providers that expose those APIs. Codex does not implement that interface today.
 
-See [architecture](docs/architecture.md), [contributing](CONTRIBUTING.md), and the [MIT license](LICENSE). This project is independent software and is not affiliated with OpenAI or Charm.
+See [architecture](docs/architecture.md) and [contributing](CONTRIBUTING.md). This project is independent software and is not affiliated with OpenAI or Charm.
+
+## License
+
+Copyright (c) 2026 **Inferal Inc.** Licensed under **Apache-2.0 OR MIT**, at your option. See [LICENSE](LICENSE), [Apache 2.0](LICENSE-APACHE), and [MIT](LICENSE-MIT).
