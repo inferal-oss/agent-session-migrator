@@ -107,6 +107,11 @@ func newRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if backend.ID() != "demo" {
+				if err := domain.ResolveHostNames(&catalog, domain.HostNamesPath(c.out)); err != nil {
+					return err
+				}
+			}
 			if w != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), w)
 			}
@@ -150,6 +155,16 @@ func newRoot() *cobra.Command {
 		return backend.Prepare(cmd.Context(), prepareFile, cmd.OutOrStdout())
 	}
 	root.AddCommand(prepare)
+	root.AddCommand(&cobra.Command{Use: "host-name HOST_ID NAME", Short: "Save a friendly destination label without changing its identity", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		backend, err := resolve(c.id)
+		if err != nil {
+			return err
+		}
+		if backend.ID() == "demo" {
+			return fmt.Errorf("demo cannot save host names")
+		}
+		return domain.SaveHostName(domain.HostNamesPath(c.out), backend.ID(), args[0], args[1])
+	}})
 	root.AddCommand(&cobra.Command{Use: "guide PROVIDER", Short: "Print the embedded provider execution guide for the coordinator", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		backend, err := resolve(args[0])
 		if err != nil {

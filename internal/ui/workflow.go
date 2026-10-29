@@ -78,6 +78,11 @@ func (m model) workflowMessage(msg tea.Msg) (model, tea.Cmd, bool) {
 }
 func (m model) workflowKey(key tea.KeyPressMsg) (model, tea.Cmd, bool) {
 	k := key.String()
+	if m.stage == "hosts" && k == "r" {
+		m.hostNameInput.SetValue(m.host().Name)
+		m.stage = "host-name"
+		return m, m.hostNameInput.Focus(), true
+	}
 	if (m.stage == "hosts" || m.stage == "queued" || m.stage == "tasks" || m.stage == "coordinator") && k == "h" {
 		entries, err := domain.History(m.o.Out)
 		if err != nil {
@@ -103,6 +108,33 @@ func (m model) workflowKey(key tea.KeyPressMsg) (model, tea.Cmd, bool) {
 		return m, m.refresh(), true
 	}
 	switch m.stage {
+	case "host-name":
+		switch k {
+		case "esc":
+			m.hostNameInput.Blur()
+			m.stage = "hosts"
+			return m, nil, true
+		case "enter":
+			name := strings.TrimSpace(m.hostNameInput.Value())
+			if name == "" {
+				m.note = "Enter a display name."
+				return m, nil, true
+			}
+			if !m.o.Demo {
+				if err := domain.SaveHostName(domain.HostNamesPath(m.o.Out), m.backend.ID(), m.host().ID, name); err != nil {
+					m.note = err.Error()
+					return m, nil, true
+				}
+			}
+			m.c.Hosts[m.hostIndex].Name = name
+			m.hostNameInput.Blur()
+			m.stage = "hosts"
+			m.note = "Display name saved; native destination ID is unchanged."
+			return m, nil, true
+		}
+		var cmd tea.Cmd
+		m.hostNameInput, cmd = m.hostNameInput.Update(key)
+		return m, cmd, true
 	case "coordinator":
 		switch k {
 		case "up", "k":
@@ -215,6 +247,8 @@ func (m model) workflowKey(key tea.KeyPressMsg) (model, tea.Cmd, bool) {
 }
 func (m model) workflowView() string {
 	switch m.stage {
+	case "host-name":
+		return "  Rename destination\n\n  " + m.hostNameInput.View() + "\n\n  Saved for future launches. Transfer identity stays unchanged.\n\n  enter save · esc cancel · ctrl+c quit\n"
 	case "coordinator":
 		items := []string{"Select an existing conversation", "Create a new coordinator conversation"}
 		var b strings.Builder

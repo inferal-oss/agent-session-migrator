@@ -64,16 +64,24 @@ The source needs Git, `sqlite3`, and an SSH client. The destination needs Git an
 
    `CODEX_HOME` controls the default provider data directory. Use `--provider-home` to override it.
 
-3. Choose the destination discovered from Codex metadata. Enter its SSH alias and an absolute checkout root. The SSH alias and selected Codex host must refer to the same machine; the executor checks destination project IDs before transferring anything.
+3. Choose the destination discovered from Codex metadata. Friendly catalog names are preserved; opaque IDs use a readable fallback. Press **r** to save your own display name for future launches. The native ID remains visible and unchanged. Enter its SSH alias and an absolute checkout root. The SSH alias and selected Codex host must refer to the same machine; the executor checks destination project IDs before transferring anything.
 4. Search and select sessions. Inspect their project names, origins, branches, dirty status, working directories, and commits. Running sessions require an explicit interruption opt-in; unknown runtime state is checked by the executor.
 5. Review and save the plan. Saving captures a stable snapshot of HEAD, staged changes, unstaged changes, and untracked file contents. A conversation is reserved against concurrent queues until its prior plan finishes or is explicitly cancelled. Press **p** to prepare destination repositories and saved projects over SSH. This action can clone repositories, import missing Git objects under migration refs, and create saved projects. It does not move conversations.
 6. Ask the coordinating Codex chat to execute the saved plan using [the Codex runner](docs/providers/codex-runner.md). The binary embeds this guide: `agent-session-migrator guide codex` prints it, so the coordinator does not need the source repository as its working directory. It processes one session at a time, reports progress in that chat, and archives only after verification.
 
 **Archiving hides the transferred chat on the destination.** It does not merely hide an old local copy. This behavior is shown in the review screen. Native handoff moves the existing chat.
 
+Host display names are saved privately in `host-names.json` beside the plan directory. They can also be set from the CLI:
+
+```sh
+agent-session-migrator host-name remote-control:example "Build server"
+```
+
+These labels do not rename the host in Codex or change its SSH target or transfer identity.
+
 Press **h** to reopen migration history, or **n** from a saved plan to transfer more conversations. History survives program restarts. Unresolved transfers remain reserved; use `cancel PLAN` only for jobs that were never dispatched.
 
-An optional `--catalog /path/to/catalog.json` accepts a fresh provider catalog exported through Codex's app tools, including readable destination names and runtime status. Without an export, discovery reads local Codex metadata, shows known remote host IDs, and leaves runtime availability unconfirmed. Local discovery currently understands `state_5.sqlite` and the desktop global-state format; unsupported formats fail with an error. Uncertain host placement is omitted rather than assumed local. See [catalog format](docs/catalog.md).
+An optional `--catalog /path/to/catalog.json` accepts a fresh provider catalog exported through Codex's app tools, including readable destination names and runtime status. Without an export, discovery reads local Codex metadata, shows known remote hosts with their native IDs as secondary detail, and leaves runtime availability unconfirmed. Local discovery currently understands `state_5.sqlite` and the desktop global-state format; unsupported formats fail with an error. Uncertain host placement is omitted rather than assumed local. See [catalog format](docs/catalog.md).
 
 ## Progress and repository preparation
 

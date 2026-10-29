@@ -146,6 +146,22 @@ func TestProgressViewShowsActualByteCount(t *testing.T) {
 		t.Fatal(m.View().Content)
 	}
 }
+
+func TestRenameHostOnlyChangesDisplayName(t *testing.T) {
+	m := demoModel(t)
+	m.stage = "hosts"
+	m.hostIndex = 1
+	id := m.host().ID
+	m = key(m, 'r', "r")
+	if m.stage != "host-name" {
+		t.Fatal(m.stage)
+	}
+	m.hostNameInput.SetValue("Build server")
+	m = key(m, tea.KeyEnter, "")
+	if m.stage != "hosts" || m.host().Name != "Build server" || m.host().ID != id {
+		t.Fatal("renaming changed destination identity")
+	}
+}
 func TestNarrowWindowAndCleanLabels(t *testing.T) {
 	m := demoModel(t)
 	m.hostIndex = 1

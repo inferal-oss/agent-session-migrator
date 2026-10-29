@@ -41,6 +41,7 @@ type Options struct {
 }
 
 type model struct {
+	hostNameInput        textinput.Model
 	backend              provider.Provider
 	o                    Options
 	c                    domain.Catalog
@@ -70,6 +71,8 @@ type model struct {
 }
 
 func New(backend provider.Provider, o Options) tea.Model {
+	hostName := textinput.New()
+	hostName.SetWidth(65)
 	f := textinput.New()
 	f.Placeholder = "Search title, project, repo, branch, path…"
 	f.SetWidth(70)
@@ -89,7 +92,7 @@ func New(backend provider.Provider, o Options) tea.Model {
 	name := textinput.New()
 	name.SetValue("Coordinate agent session migrations")
 	name.SetWidth(65)
-	return model{backend: backend, o: o, stage: "loading", table: t, filter: f, selected: map[string]bool{}, width: 110, height: 36, sshInput: ssh, rootInput: root, coordinatorName: name, bar: progress.New(progress.WithDefaultBlend())}
+	return model{hostNameInput: hostName, backend: backend, o: o, stage: "loading", table: t, filter: f, selected: map[string]bool{}, width: 110, height: 36, sshInput: ssh, rootInput: root, coordinatorName: name, bar: progress.New(progress.WithDefaultBlend())}
 }
 func (m model) Init() tea.Cmd {
 	return func() tea.Msg {
@@ -191,6 +194,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stage = "error"
 			return m, nil
 		}
+		if !m.o.Demo {
+			if err := domain.ResolveHostNames(&m.c, domain.HostNamesPath(m.o.Out)); err != nil {
+				m.note += " Display names unavailable: " + err.Error()
+			}
+		}
 		history, err := domain.History(m.o.Out)
 		if err != nil {
 			m.err = err
@@ -241,7 +249,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 	case tea.KeyPressMsg:
 		key := v.String()
-		if key == "ctrl+c" || (!m.filtering && m.stage != "connection" && m.stage != "new-coordinator" && key == "q") {
+		if key == "ctrl+c" || (!m.filtering && m.stage != "connection" && m.stage != "new-coordinator" && m.stage != "host-name" && key == "q") {
 			if m.prepareCancel != nil {
 				m.prepareCancel()
 			}
@@ -402,7 +410,7 @@ func (m model) View() tea.View {
 	}
 	b.WriteString(accent.Render("  AGENT SESSION MIGRATOR") + "\n" + muted.Render("  "+m.backend.Name()+" · Discover → select → prepare → verify → archive") + "\n\n")
 	switch m.stage {
-	case "coordinator", "existing", "new-coordinator", "creating-coordinator", "history", "sealing", "preparing":
+	case "host-name", "coordinator", "existing", "new-coordinator", "creating-coordinator", "history", "sealing", "preparing":
 		b.WriteString(m.workflowView())
 	case "loading":
 		b.WriteString("  Discovering sessions and inspecting repositories…\n")
@@ -418,7 +426,7 @@ func (m model) View() tea.View {
 			}
 			b.WriteString(line + "\n" + muted.Render("      "+clean(h.ID)) + "\n")
 		}
-		b.WriteString("\n  ↑/↓ choose · enter tasks · c coordinator · h history · q quit\n")
+		b.WriteString("\n  ↑/↓ choose · enter tasks · r rename · c coordinator · h history · q quit\n")
 	case "connection":
 		b.WriteString("  Destination: " + clean(m.host().Name) + "\n\n  SSH connection\n  " + m.sshInput.View() + "\n\n  Remote checkout root\n  " + m.rootInput.View() + "\n\n  Use the SSH alias for the selected provider host. The executor must\n  verify they refer to the same machine before moving any chats.\n\n  tab switch field · enter tasks · esc back · ctrl+c quit\n")
 	case "tasks":
